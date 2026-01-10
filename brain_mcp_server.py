@@ -420,15 +420,19 @@ async def get_entry(entry_id: str) -> str:
 
 
 if __name__ == "__main__":
-    # Support both stdio (local) and SSE (remote) transports
-    # Detect transport mode based on MCP_PORT environment variable
+    # Support stdio (local), SSE (legacy), and HTTP (recommended) transports
     transport_mode = os.getenv("MCP_TRANSPORT", "stdio")
 
-    if transport_mode == "sse":
-        # Run with SSE transport for remote access
+    if transport_mode == "http":
+        # Run with HTTP transport (recommended for network access)
+        # Avoids SSE initialization race condition (MCP SDK issue #423)
+        print(f"Starting Brain MCP server with HTTP transport on {MCP_HOST}:{MCP_PORT}")
+        print(f"MCP endpoint: http://{MCP_HOST}:{MCP_PORT}/mcp")
+        mcp.run(transport="http")
+    elif transport_mode == "sse":
+        # Run with SSE transport (legacy, has known race conditions)
         print(f"Starting Brain MCP server with SSE transport on {MCP_HOST}:{MCP_PORT}")
-        if OAUTH_ENABLED:
-            print(f"OAuth enabled - discovery endpoints available at {BASE_URL}/.well-known/")
+        print("WARNING: SSE transport has known initialization race conditions")
         mcp.run(transport="sse")
     else:
         # Run with stdio transport for local development

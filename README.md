@@ -13,7 +13,9 @@ MCP server exposing Brain service operations as tools via FastMCP.
 ## Transports
 
 - **stdio** - Local development (default)
-- **SSE** - Remote access via HTTP
+- **SSE** - Remote access via HTTP (with OAuth 2.0 support)
+
+For OAuth configuration and remote access setup, see [OAUTH_SETUP.md](OAUTH_SETUP.md).
 
 ## Local Development
 
@@ -48,3 +50,5 @@ Builds from GitHub and runs with SSE transport on port 8084.
 | MCP_TRANSPORT | stdio | Transport mode (stdio/sse) |
 | MCP_PORT | 8084 | SSE server port |
 | MCP_HOST | 0.0.0.0 | SSE server host |
+| BASE_URL | http://{MCP_HOST}:{MCP_PORT} | Base URL for OAuth metadata |
+| OAUTH_ENABLED | false | Enable OAuth (advisory flag) |

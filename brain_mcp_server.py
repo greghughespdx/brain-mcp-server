@@ -8,9 +8,12 @@ import os
 from typing import Any, Optional
 from datetime import datetime
 import uuid
+import json
 
 import httpx
 from mcp.server.fastmcp import FastMCP
+from starlette.responses import JSONResponse
+from starlette.requests import Request
 
 # API configuration
 API_BASE = os.getenv("BRAIN_API_BASE", "https://n8n.gregslab.org/webhook")
@@ -20,8 +23,169 @@ API_TIMEOUT = float(os.getenv("BRAIN_API_TIMEOUT", "30.0"))
 MCP_PORT = int(os.getenv("MCP_PORT", "8084"))
 MCP_HOST = os.getenv("MCP_HOST", "127.0.0.1")
 
+# OAuth configuration
+OAUTH_ENABLED = os.getenv("OAUTH_ENABLED", "false").lower() == "true"
+BASE_URL = os.getenv("BASE_URL", f"http://{MCP_HOST}:{MCP_PORT}")
+
 # Initialize FastMCP server with host/port for SSE transport
 mcp = FastMCP("brain-mcp-server", host=MCP_HOST, port=MCP_PORT)
+
+
+# OAuth metadata endpoints
+@mcp.custom_route("/.well-known/oauth-protected-resource", methods=["GET"])
+async def oauth_protected_resource(request: Request):
+    """OAuth 2.0 Protected Resource Metadata (RFC 9728).
+
+    Provides discovery information for OAuth clients about this MCP server.
+    """
+    metadata = {
+        "resource": BASE_URL,
+        "authorization_servers": [
+            {
+                "issuer": BASE_URL,
+            }
+        ],
+        "scopes_supported": [
+            "mcp:tools:read",
+            "mcp:tools:write",
+        ],
+        "bearer_methods_supported": ["header"]
+    }
+    return JSONResponse(metadata)
+
+
+@mcp.custom_route("/.well-known/oauth-authorization-server", methods=["GET"])
+async def oauth_authorization_server(request: Request):
+    """OAuth 2.0 Authorization Server Metadata (RFC 8414).
+
+    Provides authorization server configuration for OAuth clients.
+    """
+    metadata = {
+        "issuer": BASE_URL,
+        "authorization_endpoint": f"{BASE_URL}/authorize",
+        "token_endpoint": f"{BASE_URL}/token",
+        "registration_endpoint": f"{BASE_URL}/register",
+        "code_challenge_methods_supported": ["S256"],
+        "grant_types_supported": ["authorization_code"],
+        "response_types_supported": ["code"],
+        "scopes_supported": [
+            "mcp:tools:read",
+            "mcp:tools:write",
+        ],
+        "token_endpoint_auth_methods_supported": ["none"],
+        "client_id_metadata_document_supported": True,
+    }
+    return JSONResponse(metadata)
+
+
+@mcp.custom_route("/.well-known/openid-configuration", methods=["GET"])
+async def openid_configuration(request: Request):
+    """OpenID Connect Discovery metadata.
+
+    Some clients may attempt OpenID Connect discovery.
+    """
+    # Return the same metadata as oauth-authorization-server
+    return await oauth_authorization_server(request)
+
+
+@mcp.custom_route("/register", methods=["POST"])
+async def register_client(request: Request):
+    """Dynamic Client Registration (RFC 7591).
+
+    Simplified implementation that accepts all registrations.
+    In production, this should validate and store client metadata.
+    """
+    try:
+        client_metadata = await request.json()
+
+        # Generate a client ID based on the client_id_metadata_document URL if provided
+        # or generate a random one
+        if "client_id" in client_metadata and client_metadata["client_id"].startswith("http"):
+            client_id = client_metadata["client_id"]
+        else:
+            client_id = f"brain-mcp-client-{uuid.uuid4().hex[:16]}"
+
+        # Return registration response
+        response = {
+            "client_id": client_id,
+            "client_id_issued_at": int(datetime.now().timestamp()),
+            **client_metadata
+        }
+
+        return JSONResponse(response, status_code=201)
+    except Exception as e:
+        return JSONResponse(
+            {"error": "invalid_client_metadata", "error_description": str(e)},
+            status_code=400
+        )
+
+
+@mcp.custom_route("/authorize", methods=["GET", "POST"])
+async def authorize(request: Request):
+    """Authorization endpoint (RFC 6749).
+
+    Simplified implementation for demonstration. In production, this should:
+    - Validate the client
+    - Present user consent UI
+    - Generate and store authorization codes
+    """
+    params = dict(request.query_params)
+
+    # For demonstration, auto-approve and return authorization code
+    # In production, this would involve user interaction
+    auth_code = f"auth_{uuid.uuid4().hex}"
+    redirect_uri = params.get("redirect_uri", "")
+    state = params.get("state", "")
+
+    # Construct redirect URL
+    redirect_url = f"{redirect_uri}?code={auth_code}"
+    if state:
+        redirect_url += f"&state={state}"
+
+    # Return redirect (in real implementation, would redirect after user consent)
+    return JSONResponse({
+        "redirect_url": redirect_url,
+        "code": auth_code,
+        "message": "Auto-approved for demonstration purposes"
+    })
+
+
+@mcp.custom_route("/token", methods=["POST"])
+async def token_endpoint(request: Request):
+    """Token endpoint (RFC 6749).
+
+    Simplified implementation that issues tokens without validation.
+    In production, this should:
+    - Validate authorization codes
+    - Validate PKCE challenge
+    - Issue properly signed JWT tokens
+    """
+    try:
+        form_data = await request.form()
+        grant_type = form_data.get("grant_type")
+
+        if grant_type == "authorization_code":
+            # Generate a simple token (in production, this would be a signed JWT)
+            access_token = f"brain_token_{uuid.uuid4().hex}"
+
+            response = {
+                "access_token": access_token,
+                "token_type": "Bearer",
+                "expires_in": 3600,
+                "scope": "mcp:tools:read mcp:tools:write",
+            }
+
+            return JSONResponse(response)
+        else:
+            return JSONResponse(
+                {"error": "unsupported_grant_type"},
+                status_code=400
+            )
+    except Exception as e:
+        return JSONResponse(
+            {"error": "invalid_request", "error_description": str(e)},
+            status_code=400
+        )
 
 
 # Helper functions
@@ -263,6 +427,8 @@ if __name__ == "__main__":
     if transport_mode == "sse":
         # Run with SSE transport for remote access
         print(f"Starting Brain MCP server with SSE transport on {MCP_HOST}:{MCP_PORT}")
+        if OAUTH_ENABLED:
+            print(f"OAuth enabled - discovery endpoints available at {BASE_URL}/.well-known/")
         mcp.run(transport="sse")
     else:
         # Run with stdio transport for local development

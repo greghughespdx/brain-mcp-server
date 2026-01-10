@@ -13,7 +13,7 @@ import httpx
 from mcp.server.fastmcp import FastMCP
 
 # API configuration
-API_BASE = os.getenv("BRAIN_API_BASE", "http://192.168.15.6:8083")
+API_BASE = os.getenv("BRAIN_API_BASE", "https://n8n.gregslab.org/webhook")
 API_TIMEOUT = float(os.getenv("BRAIN_API_TIMEOUT", "30.0"))
 
 # MCP transport configuration
@@ -60,24 +60,25 @@ def create_entry_payload(
     title: Optional[str] = None,
     type_: Optional[str] = None,
     domain: Optional[str] = None,
-    source: str = "mcp-client",
-    status: str = "inbox"
+    source: str = "mcp-client"
 ) -> dict[str, Any]:
-    """Create entry payload for Brain API."""
-    now = datetime.utcnow().isoformat() + "Z"
-    entry_id = str(uuid.uuid4())
+    """Create entry payload for n8n brain-capture webhook.
 
-    return {
-        "id": entry_id,
-        "created": now,
-        "updated": now,
-        "source": source,
-        "raw_text": text,
-        "title": title or "Untitled",
-        "status": status,
-        "type": type_,
-        "domain": domain
+    Note: type_ and domain are accepted but may be overwritten by Ollama classification.
+    See Brain entry 59830269 for tech debt documentation.
+    """
+    payload = {
+        "text": text,
+        "source": source
     }
+    # Optional fields - only include if provided
+    if title:
+        payload["title"] = title
+    if type_:
+        payload["type"] = type_
+    if domain:
+        payload["domain"] = domain
+    return payload
 
 
 # MCP Tool Handlers using FastMCP decorators
@@ -112,9 +113,9 @@ async def save_to_brain(
         source=source
     )
 
-    result = await make_api_request("POST", "/brain/entries", json_data=payload)
+    result = await make_api_request("POST", "/brain-capture", json_data=payload)
 
-    return f"Thought saved to Brain.\nID: {result['id']}\nStatus: {result['status']}\n\nAuto-classification in progress..."
+    return f"Thought saved to Brain.\nID: {result['entry']['id']}\nStatus: {result['entry']['status']}\n\nAuto-classification in progress..."
 
 
 @mcp.tool()
@@ -131,7 +132,7 @@ async def quick_capture(text: str) -> str:
     """
     payload = create_entry_payload(text=text, source="mcp-client")
 
-    result = await make_api_request("POST", "/brain/entries", json_data=payload)
+    result = await make_api_request("POST", "/brain-capture", json_data=payload)
 
     return f"Thought captured.\nID: {result['id']}\n\nAuto-classification in progress..."
 
@@ -150,7 +151,7 @@ async def search_brain(query: str, limit: int = 20) -> str:
         Formatted list of matching entries
     """
     params = {"q": query}
-    results = await make_api_request("GET", "/brain/search", params=params)
+    results = await make_api_request("GET", "/brain-search", params=params)
 
     if not results:
         return "No results found."
@@ -197,7 +198,7 @@ async def list_recent(
     if type:
         params["type"] = type
 
-    results = await make_api_request("GET", "/brain/entries", params=params)
+    results = await make_api_request("GET", "/brain-list", params=params)
 
     if not results:
         return "No entries found."
@@ -226,7 +227,7 @@ async def get_entry(entry_id: str) -> str:
     Returns:
         Formatted entry details
     """
-    entry = await make_api_request("GET", f"/brain/entries/{entry_id}")
+    entry = await make_api_request("GET", "/brain-get", params={"id": entry_id})
 
     if not entry:
         return f"Entry {entry_id} not found."

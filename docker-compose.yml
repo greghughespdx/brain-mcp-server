@@ -5,7 +5,7 @@ services:
     ports:
       - "8084:8084"
     environment:
-      - BRAIN_API_BASE=http://192.168.15.6:8083
+      - BRAIN_API_BASE=https://n8n.gregslab.org/webhook
       - BRAIN_API_TIMEOUT=30.0
       - MCP_TRANSPORT=sse
       - MCP_PORT=8084

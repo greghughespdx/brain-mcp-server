@@ -12,7 +12,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY brain_mcp_server.py .
 
 # Environment variables with defaults
-ENV BRAIN_API_BASE=http://192.168.15.6:8083
+ENV BRAIN_API_BASE=https://n8n.gregslab.org/webhook
 ENV BRAIN_API_TIMEOUT=30.0
 ENV MCP_TRANSPORT=sse
 ENV MCP_PORT=8084

@@ -43,7 +43,7 @@ Builds from GitHub and runs with SSE transport on port 8084.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| BRAIN_API_BASE | http://192.168.15.6:8083 | Brain REST API URL |
+| BRAIN_API_BASE | https://n8n.gregslab.org/webhook | n8n Brain webhooks URL |
 | BRAIN_API_TIMEOUT | 30.0 | API timeout in seconds |
 | MCP_TRANSPORT | stdio | Transport mode (stdio/sse) |
 | MCP_PORT | 8084 | SSE server port |

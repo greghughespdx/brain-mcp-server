@@ -1,8 +1,6 @@
-version: '3.8'
-
 services:
   brain-mcp:
-    build: .
+    build: https://github.com/greghughespdx/brain-mcp-server.git
     container_name: brain-mcp-server
     ports:
       - "8084:8084"
@@ -13,9 +11,3 @@ services:
       - MCP_PORT=8084
       - MCP_HOST=0.0.0.0
     restart: unless-stopped
-    networks:
-      - brain-network
-
-networks:
-  brain-network:
-    driver: bridge

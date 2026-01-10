@@ -1,8 +1,59 @@
 # OAuth 2.0 Implementation for Brain MCP Server
 
-## Overview
+## Current Status: NOT IN USE
 
-The Brain MCP Server now includes OAuth 2.0 support following the Model Context Protocol (MCP) authorization specification. This enables Claude Code and other MCP clients to discover and authenticate with the server when running in SSE (remote) mode.
+**As of 2026-01-10, this OAuth implementation is not active.**
+
+### What Happened
+
+This OAuth implementation was written for the SSE transport, which requires OAuth discovery endpoints for remote MCP clients. During testing, we encountered a known MCP SDK race condition (#423) where requests arrived before SSE initialization completed.
+
+We switched to streamable-http transport, which:
+
+- Does not require OAuth discovery endpoints
+- Uses a single `/mcp` endpoint instead of SSE's dual-endpoint architecture
+- Avoids the session management complexity that caused the race condition
+
+### Why This Code Remains
+
+The OAuth endpoints (~150 lines in `brain_mcp_server.py`) are kept for reference because:
+
+1. **Future internet access may use it** - When exposing Brain MCP to the internet, we may layer OAuth on top of Cloudflare Access for fine-grained tool permissions
+2. **Standards reference** - The implementation correctly follows RFC 9728, 8414, 7591, and 6749
+3. **Learning artifact** - Documents how MCP OAuth discovery works
+
+### What We'll Actually Use for Internet Access
+
+Per research in `mission-control/docs/designs/mcp-auth-library-research.md`:
+
+```
+Internet --> Cloudflare Tunnel --> Cloudflare Access (SSO) --> Brain MCP Server
+```
+
+- Cloudflare Access handles identity (SSO with Google, GitHub, etc.)
+- FastMCP validates the `CF-Access-JWT-Assertion` header
+- Optional: Add OAuth layer inside for tool-level permissions
+
+### Current Configuration
+
+| Setting | Value | Notes |
+|---------|-------|-------|
+| Transport | streamable-http | Via `MCP_TRANSPORT=http` |
+| Endpoint | `/mcp` | Single endpoint, not SSE's `/sse` + `/messages` |
+| Auth | None | LAN-only, firewall-restricted |
+| OAuth endpoints | Present but unused | Code exists, not invoked |
+
+---
+
+## Historical Documentation (SSE Transport)
+
+The following documentation describes the OAuth implementation for SSE transport. It is preserved for reference but does not reflect current operation.
+
+---
+
+## Overview (SSE Transport - Not Current)
+
+The Brain MCP Server includes OAuth 2.0 support following the Model Context Protocol (MCP) authorization specification. This enables Claude Code and other MCP clients to discover and authenticate with the server when running in SSE (remote) mode.
 
 ## Implementation Details
 

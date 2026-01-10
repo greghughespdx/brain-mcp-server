@@ -420,15 +420,15 @@ async def get_entry(entry_id: str) -> str:
 
 
 if __name__ == "__main__":
-    # Support stdio (local), SSE (legacy), and HTTP (recommended) transports
+    # Support stdio (local), SSE (legacy), and streamable-http (recommended) transports
     transport_mode = os.getenv("MCP_TRANSPORT", "stdio")
 
-    if transport_mode == "http":
-        # Run with HTTP transport (recommended for network access)
+    if transport_mode == "http" or transport_mode == "streamable-http":
+        # Run with streamable HTTP transport (recommended for network access)
         # Avoids SSE initialization race condition (MCP SDK issue #423)
-        print(f"Starting Brain MCP server with HTTP transport on {MCP_HOST}:{MCP_PORT}")
+        print(f"Starting Brain MCP server with streamable-http transport on {MCP_HOST}:{MCP_PORT}")
         print(f"MCP endpoint: http://{MCP_HOST}:{MCP_PORT}/mcp")
-        mcp.run(transport="http")
+        mcp.run(transport="streamable-http")
     elif transport_mode == "sse":
         # Run with SSE transport (legacy, has known race conditions)
         print(f"Starting Brain MCP server with SSE transport on {MCP_HOST}:{MCP_PORT}")

@@ -134,7 +134,7 @@ async def quick_capture(text: str) -> str:
 
     result = await make_api_request("POST", "/brain-capture", json_data=payload)
 
-    return f"Thought captured.\nID: {result['id']}\n\nAuto-classification in progress..."
+    return f"Thought captured.\nID: {result['entry']['id']}\n\nAuto-classification in progress..."
 
 
 @mcp.tool()
@@ -155,6 +155,10 @@ async def search_brain(query: str, limit: int = 20) -> str:
 
     if not results:
         return "No results found."
+
+    # Normalize to list (n8n may return single object or array)
+    if isinstance(results, dict):
+        results = [results]
 
     # Format results
     output_lines = [f"Found {len(results)} result(s):\n"]

@@ -454,24 +454,18 @@ if __name__ == "__main__":
         print(f"Starting Brain MCP server with streamable-http transport on {MCP_HOST}:{MCP_PORT}")
         print(f"MCP endpoint: http://{MCP_HOST}:{MCP_PORT}/mcp")
 
-        # Apply Accept header fix via ASGI middleware
-        # We wrap the internal app before FastMCP starts uvicorn
-        original_run = mcp.run
+        # Apply Accept header fix by patching uvicorn.run to wrap the app
+        import uvicorn
+        original_uvicorn_run = uvicorn.run
 
-        def patched_run(*args, **kwargs):
-            # After FastMCP creates internal ASGI app, wrap it
-            import uvicorn
-            from mcp.server.fastmcp import FastMCP
+        def patched_uvicorn_run(app, *args, **kwargs):
+            wrapped_app = AcceptHeaderMiddleware(app)
+            print("[Accept Header Fix] Applied ASGI middleware wrapper")
+            return original_uvicorn_run(wrapped_app, *args, **kwargs)
 
-            # Get the ASGI app that FastMCP will use
-            asgi_app = mcp._mcp_server.create_streamable_http_app()
-            wrapped_app = AcceptHeaderMiddleware(asgi_app)
-            print("[Accept Header Fix] Applied ASGI middleware")
+        uvicorn.run = patched_uvicorn_run
 
-            # Run uvicorn directly with our wrapped app
-            uvicorn.run(wrapped_app, host=MCP_HOST, port=MCP_PORT)
-
-        patched_run(transport="streamable-http")
+        mcp.run(transport="streamable-http")
     elif transport_mode == "sse":
         # Run with SSE transport (legacy, has known race conditions)
         print(f"Starting Brain MCP server with SSE transport on {MCP_HOST}:{MCP_PORT}")

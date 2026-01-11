@@ -454,18 +454,17 @@ if __name__ == "__main__":
         print(f"Starting Brain MCP server with streamable-http transport on {MCP_HOST}:{MCP_PORT}")
         print(f"MCP endpoint: http://{MCP_HOST}:{MCP_PORT}/mcp")
 
-        # Apply Accept header fix by patching uvicorn.run to wrap the app
+        # Get the Starlette app from FastMCP
+        app = mcp.streamable_http_app()
+
+        # Wrap with Accept header fix middleware
+        # (Workaround for Claude Code bug #15523 - HTTP MCP client missing Accept header)
+        wrapped_app = AcceptHeaderMiddleware(app)
+        print("[Accept Header Fix] Applied ASGI middleware wrapper")
+
+        # Run with uvicorn directly
         import uvicorn
-        original_uvicorn_run = uvicorn.run
-
-        def patched_uvicorn_run(app, *args, **kwargs):
-            wrapped_app = AcceptHeaderMiddleware(app)
-            print("[Accept Header Fix] Applied ASGI middleware wrapper")
-            return original_uvicorn_run(wrapped_app, *args, **kwargs)
-
-        uvicorn.run = patched_uvicorn_run
-
-        mcp.run(transport="streamable-http")
+        uvicorn.run(wrapped_app, host=MCP_HOST, port=MCP_PORT)
     elif transport_mode == "sse":
         # Run with SSE transport (legacy, has known race conditions)
         print(f"Starting Brain MCP server with SSE transport on {MCP_HOST}:{MCP_PORT}")

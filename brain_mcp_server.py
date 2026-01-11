@@ -14,6 +14,8 @@ import httpx
 from mcp.server.fastmcp import FastMCP
 from starlette.responses import JSONResponse
 from starlette.requests import Request
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.datastructures import MutableHeaders
 
 # API configuration
 API_BASE = os.getenv("BRAIN_API_BASE", "https://n8n.gregslab.org/webhook")
@@ -27,8 +29,46 @@ MCP_HOST = os.getenv("MCP_HOST", "127.0.0.1")
 OAUTH_ENABLED = os.getenv("OAUTH_ENABLED", "false").lower() == "true"
 BASE_URL = os.getenv("BASE_URL", f"http://{MCP_HOST}:{MCP_PORT}")
 
+# Accept Header Fix Middleware
+# Workaround for Claude Code bug where it doesn't send the required
+# Accept: application/json, text/event-stream header
+class AcceptHeaderFixMiddleware(BaseHTTPMiddleware):
+    """Middleware to fix missing or wildcard Accept headers.
+
+    Claude Code's HTTP MCP client doesn't send the required Accept header,
+    causing 406 Not Acceptable errors. This middleware adds the header if:
+    - It's completely missing
+    - It contains wildcards (*/* or application/*)
+    - It doesn't include text/event-stream for /mcp endpoints
+
+    See: https://github.com/anthropics/claude-code/issues/15523
+    """
+
+    async def dispatch(self, request: Request, call_next):
+        # Only apply to /mcp endpoint
+        if request.url.path == "/mcp":
+            accept_header = request.headers.get("accept", "")
+
+            # Fix missing or wildcard Accept headers
+            if (not accept_header or
+                accept_header == "*/*" or
+                accept_header.startswith("application/*") or
+                "text/event-stream" not in accept_header):
+
+                # Create mutable headers and add the required Accept header
+                scope = request.scope
+                headers = MutableHeaders(scope["headers"])
+                headers["accept"] = "application/json, text/event-stream"
+                scope["headers"] = headers._list
+
+        return await call_next(request)
+
+
 # Initialize FastMCP server with host/port for SSE transport
 mcp = FastMCP("brain-mcp-server", host=MCP_HOST, port=MCP_PORT)
+
+# Apply middleware to fix Accept header issues
+mcp.app.add_middleware(AcceptHeaderFixMiddleware)
 
 
 # OAuth metadata endpoints

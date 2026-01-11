@@ -27,8 +27,10 @@ MCP_HOST = os.getenv("MCP_HOST", "127.0.0.1")
 OAUTH_ENABLED = os.getenv("OAUTH_ENABLED", "false").lower() == "true"
 BASE_URL = os.getenv("BASE_URL", f"http://{MCP_HOST}:{MCP_PORT}")
 
-# Initialize FastMCP server with host/port for SSE transport
-mcp = FastMCP("brain-mcp-server", host=MCP_HOST, port=MCP_PORT)
+# Initialize FastMCP server with host/port and stateless HTTP mode
+# stateless_http=True: Each request is independent (no session management)
+# This is required for Claude Code's HTTP MCP client which doesn't maintain sessions
+mcp = FastMCP("brain-mcp-server", host=MCP_HOST, port=MCP_PORT, stateless_http=True)
 
 
 # OAuth metadata endpoints

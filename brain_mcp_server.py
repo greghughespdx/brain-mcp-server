@@ -419,42 +419,29 @@ async def get_entry(entry_id: str) -> str:
     return "\n".join(output_lines)
 
 
-# Workaround for Claude Code Accept header bug
-# FastMCP.run() doesn't provide a way to inject middleware, so we patch
-# uvicorn's protocol to fix the Accept header in the ASGI scope
-def patch_uvicorn_for_accept_header():
-    """Monkey-patch uvicorn to fix Accept header in ASGI scope."""
-    try:
-        from uvicorn.protocols.http import h11_impl
+# Workaround for Claude Code Accept header bug (issue #15523)
+# Claude Code's HTTP MCP client doesn't send required Accept header
+# We use ASGI middleware to inject the header before MCP SDK validates it
+class AcceptHeaderMiddleware:
+    """ASGI middleware that fixes missing Accept header for /mcp endpoint."""
 
-        # Patch on_headers_complete which is called before handle_events
-        if hasattr(h11_impl, 'H11Protocol'):
-            original_on_headers_complete = h11_impl.H11Protocol.on_headers_complete
+    def __init__(self, app):
+        self.app = app
 
-            def patched_on_headers_complete(self):
-                # Fix Accept header in scope before processing
-                if hasattr(self, 'scope') and not hasattr(self, '_accept_fixed'):
-                    self._accept_fixed = True
-                    scope = self.scope
-                    if scope.get("type") == "http" and scope.get("path") == "/mcp":
-                        headers = scope.get("headers", [])
-                        headers_dict = {k.lower(): v for k, v in headers}
-                        accept = headers_dict.get(b"accept", b"").decode()
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http" and scope.get("path") == "/mcp":
+            headers = dict(scope.get("headers", []))
+            accept = headers.get(b"accept", b"").decode()
 
-                        if not accept or accept == "*/*" or "text/event-stream" not in accept:
-                            # Remove existing accept header and add fixed one
-                            new_headers = [(k, v) for k, v in headers if k.lower() != b"accept"]
-                            new_headers.append((b"accept", b"application/json, text/event-stream"))
-                            scope["headers"] = new_headers
-                            print("[Accept Header Fix] Fixed Accept header for /mcp request")
+            if not accept or accept == "*/*" or "text/event-stream" not in accept:
+                # Rebuild headers with fixed Accept
+                new_headers = [(k, v) for k, v in scope["headers"] if k.lower() != b"accept"]
+                new_headers.append((b"accept", b"application/json, text/event-stream"))
+                scope = dict(scope)
+                scope["headers"] = new_headers
+                print("[Accept Header Fix] Fixed Accept header for /mcp request")
 
-                # Call original method
-                return original_on_headers_complete(self)
-
-            h11_impl.H11Protocol.on_headers_complete = patched_on_headers_complete
-            print("[Accept Header Fix] Successfully patched uvicorn H11Protocol.on_headers_complete")
-    except Exception as e:
-        print(f"Warning: Could not patch uvicorn for Accept header fix: {e}")
+        await self.app(scope, receive, send)
 
 
 if __name__ == "__main__":
@@ -467,10 +454,24 @@ if __name__ == "__main__":
         print(f"Starting Brain MCP server with streamable-http transport on {MCP_HOST}:{MCP_PORT}")
         print(f"MCP endpoint: http://{MCP_HOST}:{MCP_PORT}/mcp")
 
-        # Apply Accept header fix
-        patch_uvicorn_for_accept_header()
+        # Apply Accept header fix via ASGI middleware
+        # We wrap the internal app before FastMCP starts uvicorn
+        original_run = mcp.run
 
-        mcp.run(transport="streamable-http")
+        def patched_run(*args, **kwargs):
+            # After FastMCP creates internal ASGI app, wrap it
+            import uvicorn
+            from mcp.server.fastmcp import FastMCP
+
+            # Get the ASGI app that FastMCP will use
+            asgi_app = mcp._mcp_server.create_streamable_http_app()
+            wrapped_app = AcceptHeaderMiddleware(asgi_app)
+            print("[Accept Header Fix] Applied ASGI middleware")
+
+            # Run uvicorn directly with our wrapped app
+            uvicorn.run(wrapped_app, host=MCP_HOST, port=MCP_PORT)
+
+        patched_run(transport="streamable-http")
     elif transport_mode == "sse":
         # Run with SSE transport (legacy, has known race conditions)
         print(f"Starting Brain MCP server with SSE transport on {MCP_HOST}:{MCP_PORT}")

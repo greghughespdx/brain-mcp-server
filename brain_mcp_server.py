@@ -421,18 +421,18 @@ async def get_entry(entry_id: str) -> str:
 
 # Workaround for Claude Code Accept header bug
 # FastMCP.run() doesn't provide a way to inject middleware, so we patch
-# uvicorn's ASGI callable to fix the Accept header when needed
+# uvicorn's protocol to fix the Accept header in the ASGI scope
 def patch_uvicorn_for_accept_header():
-    """Monkey-patch uvicorn's H11 protocol to fix Accept header before processing."""
+    """Monkey-patch uvicorn to fix Accept header in ASGI scope."""
     try:
         from uvicorn.protocols.http import h11_impl
 
-        # Patch the H11 protocol (which is what we're using based on logs)
+        # Patch on_headers_complete which is called before handle_events
         if hasattr(h11_impl, 'H11Protocol'):
-            original_handle_events = h11_impl.H11Protocol.handle_events
+            original_on_headers_complete = h11_impl.H11Protocol.on_headers_complete
 
-            async def patched_handle_events(self):
-                # Fix Accept header in scope before handling events
+            def patched_on_headers_complete(self):
+                # Fix Accept header in scope before processing
                 if hasattr(self, 'scope') and not hasattr(self, '_accept_fixed'):
                     self._accept_fixed = True
                     scope = self.scope
@@ -446,12 +446,13 @@ def patch_uvicorn_for_accept_header():
                             new_headers = [(k, v) for k, v in headers if k.lower() != b"accept"]
                             new_headers.append((b"accept", b"application/json, text/event-stream"))
                             scope["headers"] = new_headers
-                            print(f"[Accept Header Fix] Patched missing/invalid Accept header for /mcp request")
+                            print("[Accept Header Fix] Fixed Accept header for /mcp request")
 
-                return await original_handle_events(self)
+                # Call original method
+                return original_on_headers_complete(self)
 
-            h11_impl.H11Protocol.handle_events = patched_handle_events
-            print("[Accept Header Fix] Successfully patched uvicorn H11Protocol")
+            h11_impl.H11Protocol.on_headers_complete = patched_on_headers_complete
+            print("[Accept Header Fix] Successfully patched uvicorn H11Protocol.on_headers_complete")
     except Exception as e:
         print(f"Warning: Could not patch uvicorn for Accept header fix: {e}")
 

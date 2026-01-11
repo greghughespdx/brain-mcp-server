@@ -421,31 +421,37 @@ async def get_entry(entry_id: str) -> str:
 
 # Workaround for Claude Code Accept header bug
 # FastMCP.run() doesn't provide a way to inject middleware, so we patch
-# uvicorn's Request class to fix the Accept header when needed
+# uvicorn's ASGI callable to fix the Accept header when needed
 def patch_uvicorn_for_accept_header():
-    """Monkey-patch uvicorn's request to fix Accept header before processing."""
+    """Monkey-patch uvicorn's H11 protocol to fix Accept header before processing."""
     try:
-        from uvicorn.protocols.http import h11_impl, httptools_impl
+        from uvicorn.protocols.http import h11_impl
 
-        for protocol_module in [h11_impl, httptools_impl]:
-            if hasattr(protocol_module, 'RequestResponseCycle'):
-                original_send = protocol_module.RequestResponseCycle.send
+        # Patch the H11 protocol (which is what we're using based on logs)
+        if hasattr(h11_impl, 'H11Protocol'):
+            original_handle_events = h11_impl.H11Protocol.handle_events
 
-                async def patched_send(self, message):
-                    # Fix Accept header in scope before first send
-                    if not hasattr(self, '_accept_fixed'):
-                        self._accept_fixed = True
-                        scope = self.scope
-                        if scope.get("type") == "http" and scope.get("path") == "/mcp":
-                            headers_dict = {k: v for k, v in scope.get("headers", [])}
-                            accept = headers_dict.get(b"accept", b"").decode()
-                            if not accept or accept == "*/*" or "text/event-stream" not in accept:
-                                new_headers = [(k, v) for k, v in scope["headers"] if k != b"accept"]
-                                new_headers.append((b"accept", b"application/json, text/event-stream"))
-                                scope["headers"] = new_headers
-                    return await original_send(message)
+            async def patched_handle_events(self):
+                # Fix Accept header in scope before handling events
+                if hasattr(self, 'scope') and not hasattr(self, '_accept_fixed'):
+                    self._accept_fixed = True
+                    scope = self.scope
+                    if scope.get("type") == "http" and scope.get("path") == "/mcp":
+                        headers = scope.get("headers", [])
+                        headers_dict = {k.lower(): v for k, v in headers}
+                        accept = headers_dict.get(b"accept", b"").decode()
 
-                protocol_module.RequestResponseCycle.send = patched_send
+                        if not accept or accept == "*/*" or "text/event-stream" not in accept:
+                            # Remove existing accept header and add fixed one
+                            new_headers = [(k, v) for k, v in headers if k.lower() != b"accept"]
+                            new_headers.append((b"accept", b"application/json, text/event-stream"))
+                            scope["headers"] = new_headers
+                            print(f"[Accept Header Fix] Patched missing/invalid Accept header for /mcp request")
+
+                return await original_handle_events(self)
+
+            h11_impl.H11Protocol.handle_events = patched_handle_events
+            print("[Accept Header Fix] Successfully patched uvicorn H11Protocol")
     except Exception as e:
         print(f"Warning: Could not patch uvicorn for Accept header fix: {e}")
 

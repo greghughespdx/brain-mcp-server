@@ -419,33 +419,35 @@ async def get_entry(entry_id: str) -> str:
     return "\n".join(output_lines)
 
 
-def create_accept_header_wrapper(app):
-    """Wrap an ASGI app to fix Accept headers before they reach the app.
+# Workaround for Claude Code Accept header bug
+# FastMCP.run() doesn't provide a way to inject middleware, so we patch
+# uvicorn's Request class to fix the Accept header when needed
+def patch_uvicorn_for_accept_header():
+    """Monkey-patch uvicorn's request to fix Accept header before processing."""
+    try:
+        from uvicorn.protocols.http import h11_impl, httptools_impl
 
-    This is a simple ASGI middleware that fixes the Accept header issue
-    without depending on Starlette's middleware system.
-    """
-    async def wrapped_app(scope, receive, send):
-        if scope["type"] == "http" and scope["path"] == "/mcp":
-            # Check current Accept header
-            headers_dict = {k: v for k, v in scope.get("headers", [])}
-            accept_header = headers_dict.get(b"accept", b"").decode()
+        for protocol_module in [h11_impl, httptools_impl]:
+            if hasattr(protocol_module, 'RequestResponseCycle'):
+                original_send = protocol_module.RequestResponseCycle.send
 
-            # Fix if needed
-            if (not accept_header or
-                accept_header == "*/*" or
-                accept_header.startswith("application/*") or
-                "text/event-stream" not in accept_header):
+                async def patched_send(self, message):
+                    # Fix Accept header in scope before first send
+                    if not hasattr(self, '_accept_fixed'):
+                        self._accept_fixed = True
+                        scope = self.scope
+                        if scope.get("type") == "http" and scope.get("path") == "/mcp":
+                            headers_dict = {k: v for k, v in scope.get("headers", [])}
+                            accept = headers_dict.get(b"accept", b"").decode()
+                            if not accept or accept == "*/*" or "text/event-stream" not in accept:
+                                new_headers = [(k, v) for k, v in scope["headers"] if k != b"accept"]
+                                new_headers.append((b"accept", b"application/json, text/event-stream"))
+                                scope["headers"] = new_headers
+                    return await original_send(message)
 
-                # Replace headers with fixed Accept header
-                new_headers = [(k, v) for k, v in scope["headers"] if k != b"accept"]
-                new_headers.append((b"accept", b"application/json, text/event-stream"))
-                scope["headers"] = new_headers
-
-        # Call the actual app with (possibly modified) scope
-        await app(scope, receive, send)
-
-    return wrapped_app
+                protocol_module.RequestResponseCycle.send = patched_send
+    except Exception as e:
+        print(f"Warning: Could not patch uvicorn for Accept header fix: {e}")
 
 
 if __name__ == "__main__":
@@ -458,36 +460,10 @@ if __name__ == "__main__":
         print(f"Starting Brain MCP server with streamable-http transport on {MCP_HOST}:{MCP_PORT}")
         print(f"MCP endpoint: http://{MCP_HOST}:{MCP_PORT}/mcp")
 
-        # Wrap FastMCP.run() to inject our Accept header fix
-        import uvicorn
-        from mcp.server.transport import create_server_transport
+        # Apply Accept header fix
+        patch_uvicorn_for_accept_header()
 
-        # Create transport
-        transport = create_server_transport(
-            "streamable-http",
-            host=MCP_HOST,
-            port=MCP_PORT,
-            path="/mcp"
-        )
-
-        # Initialize the server with our mcp instance
-        asyncio = __import__('asyncio')
-        async def init_server():
-            await transport.initialize(mcp._server)
-
-        asyncio.run(init_server())
-
-        # Wrap the app with our header fix
-        wrapped_app = create_accept_header_wrapper(transport.asgi_app)
-
-        # Run with uvicorn
-        uvicorn.run(
-            wrapped_app,
-            host=MCP_HOST,
-            port=MCP_PORT,
-            log_level="info"
-        )
-
+        mcp.run(transport="streamable-http")
     elif transport_mode == "sse":
         # Run with SSE transport (legacy, has known race conditions)
         print(f"Starting Brain MCP server with SSE transport on {MCP_HOST}:{MCP_PORT}")

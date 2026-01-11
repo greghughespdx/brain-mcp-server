@@ -14,8 +14,6 @@ import httpx
 from mcp.server.fastmcp import FastMCP
 from starlette.responses import JSONResponse
 from starlette.requests import Request
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.datastructures import MutableHeaders
 
 # API configuration
 API_BASE = os.getenv("BRAIN_API_BASE", "https://n8n.gregslab.org/webhook")
@@ -29,46 +27,8 @@ MCP_HOST = os.getenv("MCP_HOST", "127.0.0.1")
 OAUTH_ENABLED = os.getenv("OAUTH_ENABLED", "false").lower() == "true"
 BASE_URL = os.getenv("BASE_URL", f"http://{MCP_HOST}:{MCP_PORT}")
 
-# Accept Header Fix Middleware
-# Workaround for Claude Code bug where it doesn't send the required
-# Accept: application/json, text/event-stream header
-class AcceptHeaderFixMiddleware(BaseHTTPMiddleware):
-    """Middleware to fix missing or wildcard Accept headers.
-
-    Claude Code's HTTP MCP client doesn't send the required Accept header,
-    causing 406 Not Acceptable errors. This middleware adds the header if:
-    - It's completely missing
-    - It contains wildcards (*/* or application/*)
-    - It doesn't include text/event-stream for /mcp endpoints
-
-    See: https://github.com/anthropics/claude-code/issues/15523
-    """
-
-    async def dispatch(self, request: Request, call_next):
-        # Only apply to /mcp endpoint
-        if request.url.path == "/mcp":
-            accept_header = request.headers.get("accept", "")
-
-            # Fix missing or wildcard Accept headers
-            if (not accept_header or
-                accept_header == "*/*" or
-                accept_header.startswith("application/*") or
-                "text/event-stream" not in accept_header):
-
-                # Create mutable headers and add the required Accept header
-                scope = request.scope
-                headers = MutableHeaders(scope["headers"])
-                headers["accept"] = "application/json, text/event-stream"
-                scope["headers"] = headers._list
-
-        return await call_next(request)
-
-
 # Initialize FastMCP server with host/port for SSE transport
 mcp = FastMCP("brain-mcp-server", host=MCP_HOST, port=MCP_PORT)
-
-# Apply middleware to fix Accept header issues
-mcp.app.add_middleware(AcceptHeaderFixMiddleware)
 
 
 # OAuth metadata endpoints
@@ -459,6 +419,35 @@ async def get_entry(entry_id: str) -> str:
     return "\n".join(output_lines)
 
 
+def create_accept_header_wrapper(app):
+    """Wrap an ASGI app to fix Accept headers before they reach the app.
+
+    This is a simple ASGI middleware that fixes the Accept header issue
+    without depending on Starlette's middleware system.
+    """
+    async def wrapped_app(scope, receive, send):
+        if scope["type"] == "http" and scope["path"] == "/mcp":
+            # Check current Accept header
+            headers_dict = {k: v for k, v in scope.get("headers", [])}
+            accept_header = headers_dict.get(b"accept", b"").decode()
+
+            # Fix if needed
+            if (not accept_header or
+                accept_header == "*/*" or
+                accept_header.startswith("application/*") or
+                "text/event-stream" not in accept_header):
+
+                # Replace headers with fixed Accept header
+                new_headers = [(k, v) for k, v in scope["headers"] if k != b"accept"]
+                new_headers.append((b"accept", b"application/json, text/event-stream"))
+                scope["headers"] = new_headers
+
+        # Call the actual app with (possibly modified) scope
+        await app(scope, receive, send)
+
+    return wrapped_app
+
+
 if __name__ == "__main__":
     # Support stdio (local), SSE (legacy), and streamable-http (recommended) transports
     transport_mode = os.getenv("MCP_TRANSPORT", "stdio")
@@ -468,7 +457,37 @@ if __name__ == "__main__":
         # Avoids SSE initialization race condition (MCP SDK issue #423)
         print(f"Starting Brain MCP server with streamable-http transport on {MCP_HOST}:{MCP_PORT}")
         print(f"MCP endpoint: http://{MCP_HOST}:{MCP_PORT}/mcp")
-        mcp.run(transport="streamable-http")
+
+        # Wrap FastMCP.run() to inject our Accept header fix
+        import uvicorn
+        from mcp.server.transport import create_server_transport
+
+        # Create transport
+        transport = create_server_transport(
+            "streamable-http",
+            host=MCP_HOST,
+            port=MCP_PORT,
+            path="/mcp"
+        )
+
+        # Initialize the server with our mcp instance
+        asyncio = __import__('asyncio')
+        async def init_server():
+            await transport.initialize(mcp._server)
+
+        asyncio.run(init_server())
+
+        # Wrap the app with our header fix
+        wrapped_app = create_accept_header_wrapper(transport.asgi_app)
+
+        # Run with uvicorn
+        uvicorn.run(
+            wrapped_app,
+            host=MCP_HOST,
+            port=MCP_PORT,
+            log_level="info"
+        )
+
     elif transport_mode == "sse":
         # Run with SSE transport (legacy, has known race conditions)
         print(f"Starting Brain MCP server with SSE transport on {MCP_HOST}:{MCP_PORT}")
